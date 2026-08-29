@@ -1,0 +1,22 @@
+[package]
+name = "tattler"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Signed, replayable receipts for indexed chain data. An answer you can hand a third party who does not trust you."
+
+[[bin]]
+name = "tattler"
+path = "src/main.rs"
+
+[dependencies]
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+sha2 = "0.10"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+ureq = { version = "2", features = ["json"] }
+time = { version = "0.3", features = ["formatting", "macros"] }
