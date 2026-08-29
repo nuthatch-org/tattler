@@ -115,7 +115,10 @@ pub fn issue(body: Body, rows: Vec<Value>, key: &SigningKey) -> Result<Receipt> 
 pub enum Verdict {
     Ok,
     /// The rows do not hash to what the body claims: something was edited after signing.
-    RowsAltered { claimed: String, actual: String },
+    RowsAltered {
+        claimed: String,
+        actual: String,
+    },
     /// The signature does not match the body under the given key.
     BadSignature,
 }
@@ -208,7 +211,8 @@ mod tests {
     fn every_field_of_the_body_is_covered_by_the_signature() {
         let base = issue(body(&rows()), rows(), &key()).unwrap();
 
-        let mutate: Vec<(&str, fn(&mut Body))> = vec![
+        type Mutation = (&'static str, fn(&mut Body));
+        let mutate: Vec<Mutation> = vec![
             ("nid", |b| b.nid = Some("someone-else".into())),
             ("dataset", |b| b.dataset = "dips".into()),
             ("query", |b| b.query = "SELECT 1".into()),
@@ -233,7 +237,11 @@ mod tests {
     #[test]
     fn a_signature_from_another_key_does_not_pass() {
         let mut r = issue(body(&rows()), rows(), &key()).unwrap();
-        r.pubkey = hex::encode(SigningKey::from_bytes(&[9u8; 32]).verifying_key().to_bytes());
+        r.pubkey = hex::encode(
+            SigningKey::from_bytes(&[9u8; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
         assert_eq!(verify(&r).unwrap(), Verdict::BadSignature);
     }
 

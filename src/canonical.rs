@@ -169,7 +169,10 @@ mod tests {
     #[test]
     fn an_empty_answer_still_has_a_hash() {
         assert!(result_hash(&[]).unwrap().starts_with("0x"));
-        assert_ne!(result_hash(&[]).unwrap(), result_hash(&rows(json!([{}]))).unwrap());
+        assert_ne!(
+            result_hash(&[]).unwrap(),
+            result_hash(&rows(json!([{}]))).unwrap()
+        );
     }
 
     /// The failure length-prefixing exists to prevent. Without it these two encode to the same
@@ -193,7 +196,9 @@ mod tests {
     /// been damaged, and the honest response is to stop rather than to attest to the damage.
     #[test]
     fn a_float_is_refused_rather_than_quietly_rounded() {
-        let err = result_hash(&rows(json!([{"tokens": 1.5}]))).unwrap_err().to_string();
+        let err = result_hash(&rows(json!([{"tokens": 1.5}])))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("floating-point"), "{err}");
     }
 

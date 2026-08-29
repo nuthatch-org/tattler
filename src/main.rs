@@ -15,7 +15,11 @@ use tattler::canonical::result_hash;
 use tattler::receipt::{issue, verify, Body, Receipt, Verdict};
 
 #[derive(Parser)]
-#[command(name = "tattler", version, about = "Receipts for indexed chain data that a stranger can check.")]
+#[command(
+    name = "tattler",
+    version,
+    about = "Receipts for indexed chain data that a stranger can check."
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -122,13 +126,16 @@ fn ask(endpoint: &str, dataset: &str, query: &str) -> Result<SqlResponse> {
         bail!("the answer hit the row cap, so it is not the whole answer. Narrow the query.");
     }
     if body.degraded {
-        bail!("the nest reported degraded tables, so this answer is missing data it should have had.");
+        bail!(
+            "the nest reported degraded tables, so this answer is missing data it should have had."
+        );
     }
     Ok(body)
 }
 
 fn load_key(path: &PathBuf) -> Result<SigningKey> {
-    let raw = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let raw =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let bytes: [u8; 32] = hex::decode(raw.trim())
         .context("the key file must be 32 bytes of hex")?
         .try_into()
@@ -137,7 +144,8 @@ fn load_key(path: &PathBuf) -> Result<SigningKey> {
 }
 
 fn read_receipt(path: &PathBuf) -> Result<Receipt> {
-    let raw = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let raw =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     serde_json::from_str(&raw).context("parsing the receipt")
 }
 
@@ -155,7 +163,14 @@ fn main() -> Result<()> {
             println!("pubkey   {}", hex::encode(key.verifying_key().to_bytes()));
         }
 
-        Cmd::Attest { endpoint, dataset, query, as_of, key, out } => {
+        Cmd::Attest {
+            endpoint,
+            dataset,
+            query,
+            as_of,
+            key,
+            out,
+        } => {
             // Checked here rather than trusted: a receipt whose query is not actually pinned would
             // carry an `as_of_block` that describes nothing, and would fail replay for reasons
             // nobody could diagnose.
@@ -169,9 +184,9 @@ fn main() -> Result<()> {
 
             let answer = ask(&endpoint, &dataset, &query)?;
             let prov = answer.provenance.as_ref();
-            let sealed = prov
-                .and_then(|p| p.sealed_through)
-                .context("the endpoint returned no sealed_through, so reproducibility cannot be checked")?;
+            let sealed = prov.and_then(|p| p.sealed_through).context(
+                "the endpoint returned no sealed_through, so reproducibility cannot be checked",
+            )?;
 
             let body = Body {
                 nid: prov.and_then(|p| p.nid.clone()),
@@ -196,7 +211,10 @@ fn main() -> Result<()> {
             println!("pubkey       {}", receipt.pubkey);
             println!();
             println!("This is a promise until somebody else replays it:");
-            println!("  tattler replay --receipt {} --endpoint <a nest you trust>", out.display());
+            println!(
+                "  tattler replay --receipt {} --endpoint <a nest you trust>",
+                out.display()
+            );
         }
 
         Cmd::Verify { receipt } => {
@@ -204,7 +222,10 @@ fn main() -> Result<()> {
             match verify(&r)? {
                 Verdict::Ok => {
                     println!("signature    ok");
-                    println!("rows         {}, hashing to {}", r.body.row_count, r.body.result_hash);
+                    println!(
+                        "rows         {}, hashing to {}",
+                        r.body.row_count, r.body.result_hash
+                    );
                     println!("pubkey       {}", r.pubkey);
                     println!();
                     println!("This says the rows are unedited since signing. It does NOT say they are true.");
@@ -217,16 +238,24 @@ fn main() -> Result<()> {
                     std::process::exit(1);
                 }
                 Verdict::BadSignature => {
-                    eprintln!("BAD SIGNATURE - the body was changed, or this is not that key's receipt");
+                    eprintln!(
+                        "BAD SIGNATURE - the body was changed, or this is not that key's receipt"
+                    );
                     std::process::exit(1);
                 }
             }
         }
 
-        Cmd::Replay { receipt, endpoint, dataset } => {
+        Cmd::Replay {
+            receipt,
+            endpoint,
+            dataset,
+        } => {
             let r = read_receipt(&receipt)?;
             if verify(&r)? != Verdict::Ok {
-                bail!("the receipt does not verify against itself; replaying it would prove nothing");
+                bail!(
+                    "the receipt does not verify against itself; replaying it would prove nothing"
+                );
             }
             let ds = dataset.unwrap_or_else(|| r.body.dataset.clone());
             let answer = ask(&endpoint, &ds, &r.body.query)?;
@@ -267,11 +296,16 @@ fn main() -> Result<()> {
             } else {
                 eprintln!();
                 eprintln!("MISMATCH - this nest does not agree with the receipt.");
-                eprintln!("Both may be honest: a different registry decodes the same logs differently.");
+                eprintln!(
+                    "Both may be honest: a different registry decodes the same logs differently."
+                );
                 eprintln!("  receipt registry  {:?}", r.body.registry_hash);
                 eprintln!(
                     "  replay registry   {:?}",
-                    answer.provenance.as_ref().and_then(|p| p.registry_hash.clone())
+                    answer
+                        .provenance
+                        .as_ref()
+                        .and_then(|p| p.registry_hash.clone())
                 );
                 std::process::exit(1);
             }
