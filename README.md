@@ -61,6 +61,42 @@ tattler replay --receipt receipt.json --endpoint <not theirs>  # the one that co
 
 Keys are read from a **file**, never a flag: argv is world-readable on Linux via `/proc`.
 
+## Named queries, which are the better unit
+
+An endpoint may publish declared queries a caller asks **by name and typed arguments**, never by
+sending SQL. Attesting one of those is a stronger thing than attesting a statement you wrote:
+
+```sh
+tattler queries --endpoint https://www.lodestar-dashboard.com
+
+tattler attest-named \
+  --endpoint https://www.lodestar-dashboard.com \
+  --name net_delegation_to_indexer \
+  --arg indexer=0xf92f430dd8567b0d466358c79594ab58d919a6d4 \
+  --arg before_block=497000000 \
+  --key issuer.key --out receipt.json
+```
+
+**Why it is stronger.** A name is the unit two parties can agree on.
+`net_delegation_to_indexer(0x…, 497000000)` means the same thing to both of them next year;
+somebody's ad-hoc SELECT does not, and reading it back is an act of interpretation rather than of
+verification. So a named receipt **replays by name**: the other endpoint answers the same declared
+question using *its own* definition, rather than being asked to agree with your text. If the two
+sides define the query differently, that is precisely the disagreement worth surfacing, and
+replaying raw SQL would have hidden it — so `replay` prints both definitions when they differ.
+
+The receipt keeps the statement as well as the name. Only the name would mean trusting the
+endpoint's definition never changed; only the statement would throw away the agreement.
+
+Arguments are sorted, so the same question asked twice signs identically.
+
+### Adding these fields did not invalidate anything
+
+`query_name` and `query_args` arrived after receipts were already in the world. Both are omitted
+from the serialised body when unset, so an unnamed body signs exactly as it did before and every
+receipt issued earlier still verifies. That is asserted directly, and the frozen fixture — issued
+before either field existed — is checked by the current binary on every run.
+
 ## Proven across two independent nests
 
 The Helsinki box runs `staking` and `legacy-flows` as separately backfilled nests that both index
@@ -100,7 +136,7 @@ turn and requires each one to break the signature.
 
 ## Tests
 
-24 in this repo plus 5 in Lodestar that run the *shipped* `.wasm` against the frozen fixture, so a
+27 in this repo plus 5 in Lodestar that run the *shipped* `.wasm` against the frozen fixture, so a
 stale browser build cannot silently disagree with the CLI. `cargo test`. The ones worth reading are the negatives: adjacent strings that must not be
 confusable, a key that must not be swappable with a value, a repeated row that must not be
 collapsed, a float that must be refused rather than rounded, the field-coverage test above, and the frozen fixture below.

@@ -56,6 +56,31 @@ enum Cmd {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Attest a **declared** query, by name and arguments.
+    ///
+    /// A separate verb rather than more optional flags on `attest`, because the two are genuinely
+    /// different acts: one signs whatever SQL you wrote, the other signs the answer to a question
+    /// the endpoint publishes and both sides can look up. Squeezing them together would produce a
+    /// command where half the flags are illegal depending on the other half.
+    AttestNamed {
+        #[arg(long)]
+        endpoint: String,
+        /// The declared query. `tattler queries --endpoint …` lists them.
+        #[arg(long)]
+        name: String,
+        /// `key=value`, repeated. Types are the endpoint's to enforce.
+        #[arg(long = "arg", value_parser = parse_arg)]
+        args: Vec<(String, String)>,
+        #[arg(long)]
+        key: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// List the declared queries an endpoint will answer by name.
+    Queries {
+        #[arg(long)]
+        endpoint: String,
+    },
     /// Check a receipt against itself. No network, no trust in whoever issued it.
     Verify {
         #[arg(long)]
@@ -86,6 +111,16 @@ struct SqlResponse {
     rows: Vec<Value>,
     #[serde(default)]
     error: Option<String>,
+    /// Only the named endpoint sends this, and only on a refusal: the set of declared names.
+    #[serde(default)]
+    allowed: Option<Vec<String>>,
+    /// The statement the endpoint actually ran. Named responses carry it; free-form ones do not,
+    /// because there the caller already has it.
+    #[serde(default)]
+    sql: Option<String>,
+    /// Which dataset answered, so a named receipt records it without the caller having to know.
+    #[serde(default)]
+    dataset: Option<String>,
     #[serde(default)]
     truncated: bool,
     #[serde(default)]
@@ -102,6 +137,47 @@ struct Provenance {
     registry_hash: Option<String>,
     #[serde(default)]
     nid: Option<String>,
+}
+
+/// Ask a declared query by name.
+///
+/// The endpoint returns the statement it actually ran, and the receipt records both: the name is
+/// what two parties agree on, the statement is what the nest answered. Keeping only the name would
+/// mean trusting the endpoint's definition never changed; keeping only the statement would throw
+/// away the agreement.
+fn ask_named(
+    endpoint: &str,
+    name: &str,
+    args: &std::collections::BTreeMap<String, String>,
+) -> Result<SqlResponse> {
+    let url = format!("{}/api/sql/named", endpoint.trim_end_matches('/'));
+    let res = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .send_json(ureq::json!({ "name": name, "args": args }));
+
+    let body: SqlResponse = match res {
+        Ok(r) => r.into_json().context("reading the response")?,
+        Err(ureq::Error::Status(_, r)) => r.into_json().context("reading the error response")?,
+        Err(e) => bail!("could not reach {url}: {e}"),
+    };
+
+    if let Some(err) = body.error {
+        let allowed = body
+            .allowed
+            .as_ref()
+            .map(|a| format!(" Allowed: {}.", a.join(", ")))
+            .unwrap_or_default();
+        bail!("the endpoint refused it: {err}{allowed}");
+    }
+    if body.truncated {
+        bail!("the answer hit the row cap, so it is not the whole answer.");
+    }
+    if body.degraded {
+        bail!(
+            "the nest reported degraded tables, so this answer is missing data it should have had."
+        );
+    }
+    Ok(body)
 }
 
 fn ask(endpoint: &str, dataset: &str, query: &str) -> Result<SqlResponse> {
@@ -131,6 +207,14 @@ fn ask(endpoint: &str, dataset: &str, query: &str) -> Result<SqlResponse> {
         );
     }
     Ok(body)
+}
+
+/// `k=v`, split on the first `=` so a value may contain one.
+fn parse_arg(s: &str) -> Result<(String, String), String> {
+    match s.split_once('=') {
+        Some((k, v)) if !k.is_empty() => Ok((k.to_string(), v.to_string())),
+        _ => Err(format!("expected key=value, got `{s}`")),
+    }
 }
 
 fn load_key(path: &PathBuf) -> Result<SigningKey> {
@@ -199,6 +283,10 @@ fn main() -> Result<()> {
                 row_count: answer.rows.len(),
                 issued_at: time::OffsetDateTime::now_utc()
                     .format(&time::format_description::well_known::Rfc3339)?,
+                // Free-form: there is no declared question to record, and inventing one would be
+                // claiming an agreement that does not exist.
+                query_name: None,
+                query_args: None,
             };
 
             let receipt = issue(body, answer.rows, &load_key(&key)?)?;
@@ -211,6 +299,96 @@ fn main() -> Result<()> {
             println!("pubkey       {}", receipt.pubkey);
             println!();
             println!("This is a promise until somebody else replays it:");
+            println!(
+                "  tattler replay --receipt {} --endpoint <a nest you trust>",
+                out.display()
+            );
+        }
+
+        Cmd::Queries { endpoint } => {
+            let url = format!("{}/api/sql/named", endpoint.trim_end_matches('/'));
+            let body: Value = ureq::get(&url)
+                .call()
+                .with_context(|| format!("could not reach {url}"))?
+                .into_json()?;
+            let queries = body["queries"].as_array().cloned().unwrap_or_default();
+            if queries.is_empty() {
+                println!("This endpoint declares no named queries.");
+            }
+            for q in queries {
+                println!(
+                    "{}  [{}]",
+                    q["name"].as_str().unwrap_or("?"),
+                    q["dataset"].as_str().unwrap_or("?")
+                );
+                if let Some(d) = q["description"].as_str() {
+                    println!("    {d}");
+                }
+                for p in q["params"].as_array().cloned().unwrap_or_default() {
+                    println!(
+                        "    --arg {}=<{}>",
+                        p["name"].as_str().unwrap_or("?"),
+                        p["type"].as_str().unwrap_or("?")
+                    );
+                }
+                println!();
+            }
+        }
+
+        Cmd::AttestNamed {
+            endpoint,
+            name,
+            args,
+            key,
+            out,
+        } => {
+            let args: std::collections::BTreeMap<String, String> = args.into_iter().collect();
+            let answer = ask_named(&endpoint, &name, &args)?;
+            let prov = answer.provenance.as_ref();
+            let sealed = prov.and_then(|p| p.sealed_through).context(
+                "the endpoint returned no sealed_through, so reproducibility cannot be checked",
+            )?;
+
+            // Every declared query pins itself, and the endpoint enforces that. Read the pin back
+            // out of the argument rather than asking for it twice: a receipt whose `as_of_block`
+            // disagreed with the argument that produced it would be quietly unreplayable.
+            let as_of: u64 = args
+                .get("before_block")
+                .context("this query has no `before_block`, so its answer is not reproducible")?
+                .parse()
+                .context("`before_block` must be a whole number")?;
+
+            let body = Body {
+                nid: prov.and_then(|p| p.nid.clone()),
+                dataset: answer.dataset.clone().unwrap_or_else(|| "unknown".into()),
+                query: answer
+                    .sql
+                    .clone()
+                    .context("the endpoint did not return the statement it ran")?,
+                as_of_block: as_of,
+                sealed_through: sealed,
+                registry_hash: prov.and_then(|p| p.registry_hash.clone()),
+                result_hash: result_hash(&answer.rows)?,
+                row_count: answer.rows.len(),
+                issued_at: time::OffsetDateTime::now_utc()
+                    .format(&time::format_description::well_known::Rfc3339)?,
+                query_name: Some(name.clone()),
+                query_args: Some(args),
+            };
+
+            let receipt = issue(body, answer.rows, &load_key(&key)?)?;
+            std::fs::write(&out, serde_json::to_string_pretty(&receipt)?)?;
+
+            println!("receipt      {}", out.display());
+            println!("query        {name}");
+            println!("rows         {}", receipt.body.row_count);
+            println!("as of block  {}", receipt.body.as_of_block);
+            println!("result       {}", receipt.body.result_hash);
+            println!();
+            println!(
+                "A named receipt replays by name, so the other side does not have to agree with"
+            );
+            println!("your SQL, only with the question:");
             println!(
                 "  tattler replay --receipt {} --endpoint <a nest you trust>",
                 out.display()
@@ -258,7 +436,30 @@ fn main() -> Result<()> {
                 );
             }
             let ds = dataset.unwrap_or_else(|| r.body.dataset.clone());
-            let answer = ask(&endpoint, &ds, &r.body.query)?;
+
+            // A named receipt replays **by name**, and that is a stronger check than replaying its
+            // SQL. Re-sending the stored statement asks the other nest to agree with our text;
+            // asking by name asks it to answer the same declared question with its own definition.
+            // If the two endpoints disagree about what `delegations_to_indexer` means, that is
+            // exactly the disagreement worth surfacing, and replaying raw SQL would hide it.
+            let answer = match (&r.body.query_name, &r.body.query_args) {
+                (Some(name), Some(args)) => {
+                    println!("asking      {name} by name");
+                    ask_named(&endpoint, name, args)?
+                }
+                _ => ask(&endpoint, &ds, &r.body.query)?,
+            };
+
+            // A named replay whose statement differs is not automatically wrong — the other side
+            // may define the query differently — but the reader must be told, or a hash match would
+            // imply an agreement about the question that was never checked.
+            if let (Some(name), Some(theirs)) = (&r.body.query_name, &answer.sql) {
+                if theirs != &r.body.query {
+                    eprintln!("note: this endpoint defines `{name}` differently:");
+                    eprintln!("  receipt: {}", r.body.query.replace('\n', " "));
+                    eprintln!("  here:    {}", theirs.replace('\n', " "));
+                }
+            }
             let sealed = answer
                 .provenance
                 .as_ref()

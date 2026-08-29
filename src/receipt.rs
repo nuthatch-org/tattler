@@ -50,6 +50,25 @@ pub struct Body {
     pub row_count: usize,
     /// RFC 3339, from the signer's clock. Evidence of when, not proof of when.
     pub issued_at: String,
+
+    // ── Added after the first receipts were issued ───────────────────────────
+    //
+    // **Both fields must be absent from the serialised body when unset, and that is load-bearing
+    // rather than tidy.** `signing_bytes` hashes this struct's own JSON; a field that serialises as
+    // `null` would change those bytes and every receipt issued before today would stop verifying.
+    // `skip_serializing_if` is what keeps the old ones valid, and the frozen fixture in
+    // `tests/fixture.rs` is what proves it — it was issued before these existed.
+    /// The declared query this answer came from, when it came from one.
+    ///
+    /// A name is the unit two parties can agree on. `delegations_to_indexer(0x…, 497000000)` means
+    /// the same thing to both of them next year; somebody's ad-hoc SELECT does not, and reading it
+    /// back is an act of interpretation rather than of verification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_name: Option<String>,
+    /// The arguments it was asked with, sorted by key so two identical questions serialise
+    /// identically and therefore sign identically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_args: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// A receipt as written to disk: the signed body, the rows it attests to, and the signature.
@@ -181,6 +200,8 @@ mod tests {
             result_hash: result_hash(rows).unwrap(),
             row_count: rows.len(),
             issued_at: "2026-08-29T12:00:00Z".into(),
+            query_name: None,
+            query_args: None,
         }
     }
 
@@ -221,6 +242,15 @@ mod tests {
             ("registry_hash", |b| b.registry_hash = Some("0xfeed".into())),
             ("row_count", |b| b.row_count = 42),
             ("issued_at", |b| b.issued_at = "2020-01-01T00:00:00Z".into()),
+            // Without these, someone could relabel a receipt as the answer to a different declared
+            // question while keeping the rows and the signature. The name is the part two parties
+            // agree on, so it is the part most worth forging.
+            ("query_name", |b| {
+                b.query_name = Some("something_else".into())
+            }),
+            ("query_args", |b| {
+                b.query_args = Some([("before_block".into(), "1".into())].into_iter().collect())
+            }),
         ];
 
         for (name, f) in mutate {
@@ -262,6 +292,71 @@ mod tests {
         b.sealed_through = 499;
         let err = issue(b, rows(), &key()).unwrap_err().to_string();
         assert!(err.contains("unsealed"), "{err}");
+    }
+
+    fn named_body(rows: &[Value]) -> Body {
+        let mut b = body(rows);
+        b.query_name = Some("delegations_to_indexer".into());
+        b.query_args = Some(
+            [
+                ("indexer".to_string(), "0xabc".to_string()),
+                ("before_block".to_string(), "497000000".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        b
+    }
+
+    #[test]
+    fn a_named_receipt_verifies_and_keeps_its_question() {
+        let r = issue(named_body(&rows()), rows(), &key()).unwrap();
+        assert_eq!(verify(&r).unwrap(), Verdict::Ok);
+        assert_eq!(r.body.query_name.as_deref(), Some("delegations_to_indexer"));
+        assert_eq!(r.body.query_args.unwrap()["before_block"], "497000000");
+    }
+
+    /// The fields were added after receipts were already in the world. `skip_serializing_if` keeps
+    /// an unnamed body serialising exactly as it did before, so the signature over it is unchanged
+    /// and every existing receipt still verifies. Asserted directly rather than left to the fixture
+    /// test to notice, because this is a property of the format, not of one file.
+    #[test]
+    fn adding_the_named_fields_did_not_change_an_unnamed_body() {
+        let b = body(&rows());
+        let json = serde_json::to_string(&b).unwrap();
+        assert!(
+            !json.contains("query_name"),
+            "an unset field must not appear: {json}"
+        );
+        assert!(
+            !json.contains("query_args"),
+            "an unset field must not appear: {json}"
+        );
+    }
+
+    /// Argument order must not change the signature, or the same question asked twice would produce
+    /// receipts that disagree. A BTreeMap is what guarantees it; this is the test that says so.
+    #[test]
+    fn argument_order_does_not_change_the_signature() {
+        let mut a = body(&rows());
+        a.query_args = Some(
+            [
+                ("z".to_string(), "1".to_string()),
+                ("a".to_string(), "2".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let mut b2 = body(&rows());
+        b2.query_args = Some(
+            [
+                ("a".to_string(), "2".to_string()),
+                ("z".to_string(), "1".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        assert_eq!(a.signing_bytes().unwrap(), b2.signing_bytes().unwrap());
     }
 
     #[test]

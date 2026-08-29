@@ -70,7 +70,12 @@ pub fn result_hash(rows_json: &str) -> String {
             Ok(h) => out(true, "ok", Some(&h), None),
             Err(e) => out(false, "error", Some(&e.to_string()), None),
         },
-        Err(e) => out(false, "malformed", Some(&format!("expected a JSON array of rows: {e}")), None),
+        Err(e) => out(
+            false,
+            "malformed",
+            Some(&format!("expected a JSON array of rows: {e}")),
+            None,
+        ),
     }
 }
 
