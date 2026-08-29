@@ -111,3 +111,34 @@ view-key disclosures: it establishes the ground truth such a scheme would be che
 which is the half that did not exist.
 
 Apache-2.0.
+
+## Verify in a browser
+
+`wasm/` compiles the same crate to WebAssembly, so the browser runs the **same** canonicalisation
+the CLI runs. A TypeScript reimplementation would be a second set of decisions about key ordering,
+integer formatting and length prefixes, and the day the two disagree the verifier reports a forgery
+that never happened. Anyone chasing that would be debugging the verifier while believing they were
+auditing the data.
+
+```sh
+cargo build --release --target wasm32-unknown-unknown -p tattler-wasm
+wasm-bindgen --target web --out-dir pkg --no-typescript \
+  target/wasm32-unknown-unknown/release/tattler_wasm.wasm
+```
+
+The library carries no clock, no network and no randomness; everything needed to *issue* a receipt
+sits behind the `cli` feature. So the browser build cannot generate a key and cannot make a request,
+and therefore cannot report home about what it was asked to check. Not that it does not: that it
+cannot, and `cargo tree` is the proof.
+
+Live at [lodestar-dashboard.com/verify](https://www.lodestar-dashboard.com/verify), which is
+convenience only — the page verifies entirely client-side, and checking a receipt against somebody's
+server would mean trusting whoever runs it.
+
+## The frozen fixture
+
+`tests/fixtures/` holds a receipt issued against live production data, with its hash pinned in
+`tests/fixture.rs`. The canonical hash is a **wire format**, not an implementation detail: a tidy-up
+that looks harmless invalidates every receipt ever issued while every unit test in `canonical.rs`
+keeps passing, because those only compare the implementation against itself. Deleting the row sort
+fails the fixture test; that has been checked rather than assumed.
