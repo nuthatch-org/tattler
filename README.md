@@ -100,7 +100,8 @@ turn and requires each one to break the signature.
 
 ## Tests
 
-24, `cargo test`. The ones worth reading are the negatives: adjacent strings that must not be
+24 in this repo plus 5 in Lodestar that run the *shipped* `.wasm` against the frozen fixture, so a
+stale browser build cannot silently disagree with the CLI. `cargo test`. The ones worth reading are the negatives: adjacent strings that must not be
 confusable, a key that must not be swappable with a value, a repeated row that must not be
 collapsed, a float that must be refused rather than rounded, the field-coverage test above, and the frozen fixture below.
 
