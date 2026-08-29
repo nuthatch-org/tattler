@@ -100,17 +100,9 @@ turn and requires each one to break the signature.
 
 ## Tests
 
-20, `cargo test`. The ones worth reading are the negatives: adjacent strings that must not be
+24, `cargo test`. The ones worth reading are the negatives: adjacent strings that must not be
 confusable, a key that must not be swappable with a value, a repeated row that must not be
-collapsed, a float that must be refused rather than rounded, and the field-coverage test above.
-
-## Status
-
-Early. It does what is written here and no more. In particular it does not verify ZK proofs or
-view-key disclosures: it establishes the ground truth such a scheme would be checked *against*,
-which is the half that did not exist.
-
-Apache-2.0.
+collapsed, a float that must be refused rather than rounded, the field-coverage test above, and the frozen fixture below.
 
 ## Verify in a browser
 
@@ -142,3 +134,12 @@ server would mean trusting whoever runs it.
 that looks harmless invalidates every receipt ever issued while every unit test in `canonical.rs`
 keeps passing, because those only compare the implementation against itself. Deleting the row sort
 fails the fixture test; that has been checked rather than assumed.
+
+## Status
+
+Early. It does what is written here and no more. In particular it does not verify ZK proofs or
+view-key disclosures: it establishes the ground truth such a scheme would be checked *against*,
+which is the half that did not exist.
+
+
+Apache-2.0.
