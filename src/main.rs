@@ -473,7 +473,9 @@ fn main() -> Result<()> {
                         .iter()
                         .filter(|row| match row.get(k) {
                             Some(serde_json::Value::String(s)) => s == v,
-                            Some(other) => other.to_string() == *v,
+                            // A number matches its decimal text, so `--matching block_number=493`
+                            // works without the caller quoting it as JSON.
+                            Some(other) => v == &other.to_string(),
                             None => false,
                         })
                         .collect();

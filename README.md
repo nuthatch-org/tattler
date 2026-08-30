@@ -57,6 +57,8 @@ tattler attest \
 
 tattler verify --receipt receipt.json                        # offline, no trust required
 tattler replay --receipt receipt.json --endpoint <not theirs>  # the one that counts
+tattler disclose --receipt receipt.json --matching k=v --out d.json  # one row, not the answer
+tattler check-disclosure --disclosure d.json                  # offline, no rows required
 ```
 
 Keys are read from a **file**, never a flag: argv is world-readable on Linux via `/proc`.
@@ -110,6 +112,51 @@ MATCH
 ```
 
 Two indexes, built at different times from different configurations, computed the same answer.
+
+## Showing one row and not the rest
+
+A receipt is all-or-nothing: it carries its rows, so handing one over publishes the whole answer.
+That is the wrong shape for the ordinary institutional case, where a counterparty wants to check a
+single line and the holder will prove that line without publishing the book it came from.
+
+Every receipt now also commits to a **Merkle root over the same sorted row hashes** the result hash
+folds together. Not a second set of facts, the same ones, so the two commitments cannot disagree.
+
+```sh
+tattler disclose --receipt receipt.json --matching delegator=0x9ebe... --out disclosure.json
+tattler check-disclosure --disclosure disclosure.json
+```
+
+A disclosure is the signed body and signature **with the rows removed**, plus the one chosen row and
+its path to the root. Checking it establishes that the body is authentic and that the row was among
+the rows it was signed over. A real disclosure of one delegation out of 34 is 1,991 bytes against
+the receipt's 10,271, and carries six sibling hashes.
+
+What the recipient learns: that row, how many rows there were, and the question. What they do not
+learn is any other row, which is asserted against the bytes rather than described.
+
+**The signature is checked before the proof, and the order is load-bearing.** The committed root is
+a field in the body, so checking a proof first would be checking it against a number the presenter
+chose.
+
+**Two limits, both real.**
+
+The leaves are **not salted**. Anyone holding a disclosure can test a guess at a neighbouring row by
+hashing it. Against rows carrying an address or a `uint256` that is no help; against rows drawn from
+a small set it is trivial. Salting would close it at the cost of the issuer holding a per-receipt
+secret forever and of the tree no longer being built from the hashes the result hash already commits
+to, and that trade is not obviously right, so the limit is stated instead.
+
+Receipts issued before this existed **committed to no root**, so nothing can be disclosed from them.
+`disclose` says so rather than computing a root now: a commitment chosen after the fact by whoever
+wants to use it is not a commitment. Those receipts still verify exactly as they always did.
+
+The tree is [RFC 6962](https://www.rfc-editor.org/rfc/rfc6962#section-2.1)'s, near enough verbatim,
+for two properties worth the fidelity. Leaves and internal nodes are domain-separated by a `0x00` /
+`0x01` prefix, without which an internal node can be passed off as a leaf and a row that was never in
+the answer becomes provable. And an odd node is promoted rather than duplicated, which is what
+Bitcoin does and what makes two different leaf lists produce one root (CVE-2012-2459). Both are
+pinned by tests that fail if either property is removed.
 
 ## The canonical hash
 
