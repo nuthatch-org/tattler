@@ -86,6 +86,34 @@ enum Cmd {
         #[arg(long)]
         receipt: PathBuf,
     },
+    /// Prove one row of a receipt without handing over the rest of the answer.
+    ///
+    /// The use this exists for: a counterparty wants to check a single line, and the holder is
+    /// willing to prove that line and not to publish the book it came from. The disclosure carries
+    /// the same signed body and signature with the rows removed, plus the chosen row and its path
+    /// to the Merkle root the body committed to.
+    ///
+    /// **The leaves are not salted**, so a recipient can test guesses at neighbouring rows by
+    /// hashing them. That is no help against rows carrying an address or a `uint256`, and no
+    /// obstacle at all for rows drawn from a small set. Disclose from the former.
+    Disclose {
+        #[arg(long)]
+        receipt: PathBuf,
+        /// The row to disclose, as JSON, matched exactly against the receipt's rows.
+        #[arg(long, conflicts_with = "matching")]
+        row: Option<String>,
+        /// Or pick it by a `key=value` the row must carry. Refuses if it matches more than one,
+        /// because silently disclosing the first of several is how the wrong line gets published.
+        #[arg(long, value_parser = parse_arg)]
+        matching: Option<(String, String)>,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Check a disclosure: that the body is signed, and that the row it shows was in the answer.
+    CheckDisclosure {
+        #[arg(long)]
+        disclosure: PathBuf,
+    },
     /// Re-run the receipt's question against a nest and compare.
     ///
     /// **This is the verb that turns a promise into a proof**, but only if you point it somewhere
@@ -287,6 +315,7 @@ fn main() -> Result<()> {
                 // claiming an agreement that does not exist.
                 query_name: None,
                 query_args: None,
+                merkle_root: None,
             };
 
             let receipt = issue(body, answer.rows, &load_key(&key)?)?;
@@ -374,6 +403,7 @@ fn main() -> Result<()> {
                     .format(&time::format_description::well_known::Rfc3339)?,
                 query_name: Some(name.clone()),
                 query_args: Some(args),
+                merkle_root: None,
             };
 
             let receipt = issue(body, answer.rows, &load_key(&key)?)?;
@@ -418,6 +448,99 @@ fn main() -> Result<()> {
                 Verdict::BadSignature => {
                     eprintln!(
                         "BAD SIGNATURE - the body was changed, or this is not that key's receipt"
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Cmd::Disclose {
+            receipt,
+            row,
+            matching,
+            out,
+        } => {
+            let r = read_receipt(&receipt)?;
+            let chosen = match (&row, &matching) {
+                (Some(json), _) => {
+                    let want: serde_json::Value =
+                        serde_json::from_str(json).context("parsing --row as JSON")?;
+                    want
+                }
+                (None, Some((k, v))) => {
+                    let hits: Vec<&serde_json::Value> = r
+                        .rows
+                        .iter()
+                        .filter(|row| match row.get(k) {
+                            Some(serde_json::Value::String(s)) => s == v,
+                            Some(other) => other.to_string() == *v,
+                            None => false,
+                        })
+                        .collect();
+                    match hits.len() {
+                        0 => bail!("no row in this receipt has {k}={v}"),
+                        1 => hits[0].clone(),
+                        n => bail!(
+                            "{n} rows have {k}={v}. Disclosing one of several without saying which \
+                             would publish a line you did not choose; narrow it with --row."
+                        ),
+                    }
+                }
+                (None, None) => bail!("give either --row or --matching"),
+            };
+
+            let d = tattler::receipt::disclose(&r, &chosen)?;
+            std::fs::write(&out, serde_json::to_string_pretty(&d)?)?;
+            println!("wrote {}", out.display());
+            println!(
+                "It shows 1 row of {}, the question, and nothing else.",
+                d.body.row_count
+            );
+            println!("  tattler check-disclosure --disclosure {}", out.display());
+        }
+
+        Cmd::CheckDisclosure { disclosure } => {
+            let raw = std::fs::read_to_string(&disclosure)
+                .with_context(|| format!("reading {}", disclosure.display()))?;
+            let d: tattler::receipt::Disclosure =
+                serde_json::from_str(&raw).context("parsing the disclosure")?;
+
+            match tattler::receipt::check_disclosure(&d)? {
+                tattler::receipt::DisclosureVerdict::Ok => {
+                    println!("OK - this row was in the answer that body was signed over.");
+                    println!("row       {}", serde_json::to_string(&d.proof.row)?);
+                    println!("of        {} rows", d.body.row_count);
+                    println!("question  {}", d.body.query.replace('\n', " "));
+                    println!("pinned    block {}", d.body.as_of_block);
+                    println!("issuer    {}", d.pubkey);
+                    println!();
+                    // The same limit `verify` states, and for the same reason: this establishes
+                    // what was signed, not that it was true.
+                    println!(
+                        "That the row is genuine still rests on whoever holds {}.",
+                        &d.pubkey[..16]
+                    );
+                    println!("A signed wrong answer is a wrong answer, signed.");
+                }
+                tattler::receipt::DisclosureVerdict::BadSignature => {
+                    eprintln!("BAD SIGNATURE - the body was edited, or it was not signed by that key.");
+                    eprintln!("Nothing below the signature means anything, so the proof was not checked.");
+                    std::process::exit(1);
+                }
+                tattler::receipt::DisclosureVerdict::NotProven { committed, actual } => {
+                    eprintln!("NOT PROVEN - the body is signed, and this row does not belong to it.");
+                    eprintln!("  committed {committed}");
+                    eprintln!("  proof     {actual}");
+                    eprintln!(
+                        "Either the row was not in the answer or the path was altered. This cannot \
+                         tell which, and guessing would be worse than not saying."
+                    );
+                    std::process::exit(1);
+                }
+                tattler::receipt::DisclosureVerdict::NoCommitment => {
+                    eprintln!(
+                        "NO COMMITMENT - that receipt predates Merkle roots, so it committed to \
+                         nothing a proof could be checked against."
                     );
                     std::process::exit(1);
                 }

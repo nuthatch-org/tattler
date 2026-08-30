@@ -99,6 +99,22 @@ fn row_hash(row: &Value) -> Result<[u8; 32]> {
     Ok(Sha256::digest(&buf).into())
 }
 
+/// The canonical hash of one row, for [`crate::merkle`].
+pub(crate) fn row_hash_public(row: &Value) -> Result<[u8; 32]> {
+    row_hash(row)
+}
+
+/// Every row hashed and the hashes sorted: the list [`result_hash`] folds into one digest.
+///
+/// Exposed so the Merkle tree is built over *these* hashes rather than over its own idea of them.
+/// Two commitments to the same answer that disagreed about what the answer was would be worse than
+/// having only one, and the only way to be sure they cannot is to give them one list.
+pub(crate) fn sorted_row_hashes(rows: &[Value]) -> Result<Vec<[u8; 32]>> {
+    let mut hashes: Vec<[u8; 32]> = rows.iter().map(row_hash).collect::<Result<_>>()?;
+    hashes.sort_unstable();
+    Ok(hashes)
+}
+
 /// The canonical hash of a whole result set.
 ///
 /// Rows are hashed individually, those hashes are sorted, and the sorted list is hashed. Sorting
@@ -108,8 +124,7 @@ fn row_hash(row: &Value) -> Result<[u8; 32]> {
 /// Duplicate rows are kept, not deduplicated: two identical events at different log indexes are two
 /// facts, and a receipt that quietly collapsed them would understate the answer.
 pub fn result_hash(rows: &[Value]) -> Result<String> {
-    let mut hashes: Vec<[u8; 32]> = rows.iter().map(row_hash).collect::<Result<_>>()?;
-    hashes.sort_unstable();
+    let hashes = sorted_row_hashes(rows)?;
 
     let mut h = Sha256::new();
     h.update(DOMAIN);
