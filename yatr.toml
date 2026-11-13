@@ -1,0 +1,54 @@
+# yatr - https://github.com/cargopete/yatr
+
+[env]
+CARGO_TERM_COLOR = "always"
+
+[tasks.fmt]
+desc = "Format the tree"
+run = ["cargo fmt --all"]
+no_cache = true
+
+[tasks.fmt-check]
+desc = "Fail if the tree is unformatted"
+run = ["cargo fmt --all --check"]
+sources = ["src/**/*.rs", "tests/**/*.rs", "wasm/src/**/*.rs"]
+
+[tasks.lint]
+desc = "Clippy with warnings denied"
+run = ["cargo clippy --workspace --all-targets -- -D warnings"]
+sources = ["src/**", "tests/**", "wasm/src/**", "wasm/Cargo.toml", "Cargo.toml", "Cargo.lock"]
+
+[tasks.test]
+desc = "The test suite, frozen fixture included"
+run = ["cargo test --workspace"]
+sources = ["src/**", "tests/**", "wasm/src/**", "wasm/Cargo.toml", "Cargo.toml", "Cargo.lock"]
+watch = ["src/**", "tests/**"]
+
+# The CLI must match the wasm-bindgen in Cargo.lock exactly, or it refuses the module.
+[tasks.bindgen]
+desc = "Install the wasm-bindgen CLI that matches Cargo.lock into target/tools"
+run = ["cargo install wasm-bindgen-cli --version 0.2.127 --locked --root target/tools"]
+sources = ["Cargo.lock"]
+outputs = ["target/tools/bin/wasm-bindgen"]
+
+# pkg/ is committed: it is what Lodestar's staleness guard checks against.
+[tasks.wasm]
+desc = "Rebuild the browser verifier into pkg/"
+depends = ["bindgen"]
+run = [
+  "cargo build --release --target wasm32-unknown-unknown -p tattler-wasm",
+  "target/tools/bin/wasm-bindgen --target web --out-dir pkg --no-typescript target/wasm32-unknown-unknown/release/tattler_wasm.wasm",
+]
+sources = ["src/**", "wasm/src/**", "wasm/Cargo.toml", "Cargo.toml", "Cargo.lock"]
+outputs = ["pkg/tattler_wasm.js", "pkg/tattler_wasm_bg.wasm"]
+
+[tasks.install-lodestar]
+desc = "Build both verifiers and copy them into ../lodestar/public/tattler"
+depends = ["bindgen"]
+env = { PATH = "target/tools/bin:${PATH}" }
+run = ["wasm/build.sh"]
+no_cache = true
+
+[tasks.ci]
+desc = "fmt-check, lint, test"
+depends = ["fmt-check", "lint", "test"]
